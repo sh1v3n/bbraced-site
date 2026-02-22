@@ -38,7 +38,7 @@ export default function HomePage() {
               <span className="nowrap">from Dr. Pravin Shetty&apos;s team.</span>
             </h2>
             <p>
-              b.Braced Aligner Coach is a voice-first AI companion that explains
+              b.Braced Aligner Buddy is a voice-first AI companion that explains
               clear aligners, aftercare, and treatment expectations. Patients can
               speak naturally and get instant responses in multiple Indian languages.
             </p>

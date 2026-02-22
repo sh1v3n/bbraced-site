@@ -1,7 +1,7 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "b.Braced Aligner Coach",
+  title: "b.Braced Aligner Buddy",
   description: "AI assistant for clear aligner questions in multiple Indian languages",
 };
 

@@ -18,7 +18,7 @@ There are no tests in this project.
 Copy `.env.local` (deleted from git) and set at least one AI provider key:
 
 ```
-SARVAM_API_KEY=...      # Uses sarvam-30b (Indian multilingual model) — primary
+SARVAM_API_KEY=...      # Uses sarvam-105b-conversations (Indian multilingual model) — primary
 GEMINI_API_KEY=...      # Uses gemini-flash-latest (override with GEMINI_MODEL) — free-tier backup
 OPENAI_API_KEY=...      # Uses gpt-4o-mini
 AI_PROVIDER=sarvam      # which provider to try first — optional

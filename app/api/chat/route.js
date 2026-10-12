@@ -85,7 +85,7 @@ const PROVIDERS = {
   sarvam: {
     endpoint: SARVAM_ENDPOINT,
     envKey: "SARVAM_API_KEY",
-    model: () => "sarvam-30b",
+    model: () => "sarvam-105b-conversations",
     headers: key => ({ "api-subscription-key": key })
   },
   gemini: {

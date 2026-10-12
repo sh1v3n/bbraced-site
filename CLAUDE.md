@@ -30,7 +30,7 @@ Provider logic in `app/api/chat/route.js`: providers with a key are tried in ord
 
 ## Architecture
 
-This is a Next.js 14 App Router project with no database — all clinic knowledge is hardcoded in `lib/clinic-knowledge.js`.
+This is a Next.js 15 (React 19) App Router project with no database — all clinic knowledge is hardcoded in `lib/clinic-knowledge.js`.
 
 **Data flow:**
 1. `lib/clinic-knowledge.js` — single source of truth for all clinic content: `CLINIC_INFO`, `TREATMENT_STAGES`, `SYMPTOM_TRIAGE`, `CARE_INSTRUCTIONS`, `FAQ_BANK`, `PRICING`. Edit here to change any clinic facts, triage rules, or FAQs.

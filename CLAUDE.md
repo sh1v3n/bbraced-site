@@ -18,12 +18,15 @@ There are no tests in this project.
 Copy `.env.local` (deleted from git) and set at least one AI provider key:
 
 ```
+SARVAM_API_KEY=...      # Uses sarvam-30b (Indian multilingual model) — primary
+GEMINI_API_KEY=...      # Uses gemini-flash-latest (override with GEMINI_MODEL) — free-tier backup
 OPENAI_API_KEY=...      # Uses gpt-4o-mini
-SARVAM_API_KEY=...      # Uses sarvam-m (Indian multilingual model)
-AI_PROVIDER=openai      # or "sarvam" — omit to auto-select based on available keys
+AI_PROVIDER=sarvam      # which provider to try first — optional
 ```
 
-Provider selection logic in `app/api/chat/route.js`: if `AI_PROVIDER` is unset, Sarvam is preferred when its key is present; otherwise falls back to OpenAI.
+Provider logic in `app/api/chat/route.js`: providers with a key are tried in order (AI_PROVIDER first, then Sarvam → Gemini → OpenAI). If one fails (bad key, no credits, outage) the next is tried automatically.
+
+`/api/chat` is rate-limited per IP (10/min, 1000/day) by `lib/rate-limit.js`, in memory and best-effort on serverless. Conversation history is capped at 20 messages × 2000 chars.
 
 ## Architecture
 
@@ -39,4 +42,5 @@ This is a Next.js 14 App Router project with no database — all clinic knowledg
 
 **Styling:** Global CSS only (`app/globals.css`). CSS custom properties define the entire design token system (colours, fonts, radii, shadows). No CSS modules or Tailwind. Fonts: Fraunces (display/headings) and Manrope (body). The chat layout uses `.chat-shell` / `.chat-sidebar` / `.chat-main` flex classes; sidebar hides below 960 px.
 
-**AI provider abstraction:** Both OpenAI and Sarvam use the same OpenAI-compatible `/v1/chat/completions` schema. The only differences are the auth header (`Authorization: Bearer` vs `api-subscription-key`) and the model name (`gpt-4o-mini` vs `sarvam-m`).
+**AI provider abstraction:** Sarvam, Gemini and OpenAI all use the same OpenAI-compatible `/v1/chat/completions` schema. Per-provider endpoint, auth header and model live in the `PROVIDERS` table in `route.js`.
+

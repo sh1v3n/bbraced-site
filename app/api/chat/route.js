@@ -11,9 +11,11 @@ import {
   PRICING_CONTEXT,
   ANXIETY_GUIDE
 } from '@/lib/clinic-knowledge'
+import { checkRateLimit, getClientIp } from '@/lib/rate-limit'
 
 const SARVAM_ENDPOINT = "https://api.sarvam.ai/v1/chat/completions"
 const OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions"
+const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 
 const baseFallback =
   "Thanks for your question! This assistant provides general guidance only. For case-specific advice, please contact the clinic."
@@ -78,31 +80,55 @@ RESPONSE RULES
 - Clinic contact: ${CLINIC_INFO.name} | ${CLINIC_INFO.phone} | ${CLINIC_INFO.hours} — include only when genuinely relevant.`
 }
 
-function resolveProvider(sarvamKey, openaiKey) {
-  const providerEnv = (process.env.AI_PROVIDER || "").toLowerCase().trim()
-  if (providerEnv === "openai") return "openai"
-  if (providerEnv === "sarvam") return "sarvam"
-  return sarvamKey ? "sarvam" : "openai"
+// All three providers speak the OpenAI-compatible /chat/completions schema
+const PROVIDERS = {
+  sarvam: {
+    endpoint: SARVAM_ENDPOINT,
+    envKey: "SARVAM_API_KEY",
+    model: () => "sarvam-30b",
+    headers: key => ({ "api-subscription-key": key })
+  },
+  gemini: {
+    endpoint: GEMINI_ENDPOINT,
+    envKey: "GEMINI_API_KEY",
+    model: () => process.env.GEMINI_MODEL || "gemini-flash-latest",
+    headers: key => ({ Authorization: `Bearer ${key}` })
+  },
+  openai: {
+    endpoint: OPENAI_ENDPOINT,
+    envKey: "OPENAI_API_KEY",
+    model: () => "gpt-4o-mini",
+    headers: key => ({ Authorization: `Bearer ${key}` })
+  }
 }
 
+// Order to try providers in: AI_PROVIDER first (if set), then Sarvam → Gemini → OpenAI.
+// Only providers with a key configured are included, so Gemini acts as a backup
+// whenever the primary fails (bad key, no credits, outage).
+function providerOrder() {
+  const preferred = (process.env.AI_PROVIDER || "").toLowerCase().trim()
+  const names = ["sarvam", "gemini", "openai"]
+  if (PROVIDERS[preferred]) names.sort((a, b) => (b === preferred) - (a === preferred))
+  return names.filter(name => process.env[PROVIDERS[name].envKey])
+}
+
+const MAX_HISTORY_MESSAGES = 20
+const MAX_MESSAGE_CHARS = 2000
+
 export async function POST(request) {
+  const limit = checkRateLimit(getClientIp(request))
+  if (!limit.allowed) {
+    return Response.json(
+      { reply: limit.message },
+      { status: 429, headers: { "Retry-After": String(limit.retryAfter) } }
+    )
+  }
+
   const { message, messages, patientStage } = await request.json()
-  const sarvamKey = process.env.SARVAM_API_KEY
-  const openaiKey = process.env.OPENAI_API_KEY
+  const providers = providerOrder()
 
-  if (!sarvamKey && !openaiKey) {
-    const debug = isDev ? " (Debug: missing OPENAI_API_KEY or SARVAM_API_KEY)" : ""
-    return Response.json({ reply: `${baseFallback}${debug}` })
-  }
-
-  const provider = resolveProvider(sarvamKey, openaiKey)
-
-  if (provider === "sarvam" && !sarvamKey) {
-    const debug = isDev ? " (Debug: AI_PROVIDER=sarvam but SARVAM_API_KEY is missing)" : ""
-    return Response.json({ reply: `${baseFallback}${debug}` })
-  }
-  if (provider === "openai" && !openaiKey) {
-    const debug = isDev ? " (Debug: no OPENAI_API_KEY found)" : ""
+  if (!providers.length) {
+    const debug = isDev ? " (Debug: set SARVAM_API_KEY, GEMINI_API_KEY or OPENAI_API_KEY)" : ""
     return Response.json({ reply: `${baseFallback}${debug}` })
   }
 
@@ -110,43 +136,52 @@ export async function POST(request) {
 
   const rawConversation = Array.isArray(messages) && messages.length
     ? messages
-        .map(msg => ({ role: msg.role === "assistant" ? "assistant" : "user", content: msg.text || msg.content || "" }))
+        .map(msg => ({ role: msg.role === "assistant" ? "assistant" : "user", content: String(msg.text || msg.content || "").slice(0, MAX_MESSAGE_CHARS) }))
         .filter(msg => msg.content)
-    : [{ role: "user", content: message || "" }]
+        .slice(-MAX_HISTORY_MESSAGES)
+    : [{ role: "user", content: String(message || "").slice(0, MAX_MESSAGE_CHARS) }]
 
   const firstUserIndex = rawConversation.findIndex(msg => msg.role === "user")
   const conversation = firstUserIndex >= 0
     ? rawConversation.slice(firstUserIndex)
-    : [{ role: "user", content: message || "" }]
+    : [{ role: "user", content: String(message || "").slice(0, MAX_MESSAGE_CHARS) }]
 
-  const endpoint = provider === "openai" ? OPENAI_ENDPOINT : SARVAM_ENDPOINT
-  const activeKey = provider === "openai" ? openaiKey : sarvamKey
+  const errors = []
+  let upstream = null
+
+  for (const name of providers) {
+    const provider = PROVIDERS[name]
+    const key = process.env[provider.envKey].trim()
+    try {
+      const res = await fetch(provider.endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...provider.headers(key) },
+        body: JSON.stringify({
+          model: provider.model(),
+          messages: [{ role: "system", content: systemPrompt }, ...conversation],
+          temperature: 0.3,
+          stream: true
+        })
+      })
+      if (res.ok) {
+        upstream = res
+        break
+      }
+      const errorText = await res.text()
+      errors.push(`${name}: ${res.status} ${res.statusText} — ${errorText.slice(0, 200)}`)
+      console.error(`[chat] ${name} failed with ${res.status}, trying next provider`)
+    } catch (error) {
+      errors.push(`${name}: ${error.message || "network error"}`)
+      console.error(`[chat] ${name} request error: ${error.message}`)
+    }
+  }
+
+  if (!upstream) {
+    const debug = isDev ? ` (Debug: ${errors.join(" | ")})` : ""
+    return Response.json({ reply: `${baseFallback}${debug}` })
+  }
 
   try {
-    const upstream = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(provider === "openai"
-          ? { Authorization: `Bearer ${openaiKey}` }
-          : { "api-subscription-key": sarvamKey })
-      },
-      body: JSON.stringify({
-        model: provider === "openai" ? "gpt-4o-mini" : "sarvam-30b",
-        messages: [{ role: "system", content: systemPrompt }, ...conversation],
-        temperature: 0.3,
-        stream: true
-      })
-    })
-
-    if (!upstream.ok) {
-      const errorText = await upstream.text()
-      const debug = isDev
-        ? ` (Debug: ${upstream.status} ${upstream.statusText} — ${errorText.slice(0, 200)} | key length: ${String(activeKey).trim().length})`
-        : ""
-      return Response.json({ reply: `${baseFallback}${debug}` })
-    }
-
     // Proxy the SSE stream, forwarding only the text delta from each chunk
     const encoder = new TextEncoder()
     const decoder = new TextDecoder()
